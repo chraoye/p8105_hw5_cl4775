@@ -1,0 +1,398 @@
+---
+title: "Homework 5"
+author: "cl4775"
+date: "2025-11-14"
+output: github_document
+---
+
+# Problem 0
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,           # Show code in output
+  warning = FALSE,       # Hide warnings
+  message = FALSE,       # Hide messages
+  fig.width = 8,        # Set default figure width
+  fig.height = 6,       # Set default figure height
+  fig.align = "center"  # Center figures
+)
+
+# Set seed for reproducibility
+set.seed(123)
+```
+
+
+```{r load-packages}
+
+# Load required packages
+library(tidyverse)  
+library(broom)      
+```
+
+# Problem 1: Birthday Problem Simulation
+
+We want to find the probability that at least 2 people in a group share a birthday.
+
+## Step 1: Birthday simulation function
+```{r birthday-function}
+# Function to simulate birthdays and check for duplicates
+simulate_birthdays <- function(n) {
+  # n = number of people in the group
+  
+  # Generate random birthdays (1-365) for n people
+  birthdays <- sample(1:365, size = n, replace = TRUE)
+  
+  # Check if there are any duplicate birthdays: if length(unique(birthdays)) < n, there are duplicates
+  has_duplicate <- length(unique(birthdays)) < n
+  
+  # Return TRUE if there's a duplicate, FALSE otherwise
+  return(has_duplicate)
+}
+```
+
+## Step 2: Run simulations for group sizes 2-50
+```{r birthday-simulation}
+# Parameters
+n_simulations <- 10000
+group_sizes <- 2:50 
+
+# Run simulations: for each group size, we'll run the simulation 10000 times
+birthday_results <- tibble(
+  group_size = group_sizes
+) %>%
+  mutate(
+    # the replicate() command runs a function multiple times and returns results
+    simulations = map(group_size, ~replicate(n_simulations, simulate_birthdays(.x))),
+    # Calculate probability: mean of TRUE/FALSE values, where TRUE counts as 1, FALSE as 0, so mean gives us the proportion
+    probability = map_dbl(simulations, mean)
+  )
+```
+
+## Step 3: Visualize the results
+```{r birthday-plot}
+ggplot(birthday_results, aes(x = group_size, y = probability)) +
+  geom_line(color = "blue", size = 1) +
+  geom_point(size = 2, alpha = 0.6) +
+  # Horizontal line at 50% probability
+  geom_hline(yintercept = 0.5, linetype = "dashed", color = "red") +
+  labs(
+    title = "Probability of Shared Birthdays by Group Size",
+    subtitle = "(Based on 10,000 simulations per group size)",
+    x = "Group Size (Number of People)",
+    y = "Probability of at Least One Shared Birthday"
+  ) +
+  # Use a clean theme to make graph look better
+  theme_minimal() +
+  # Format text better
+  theme(
+    plot.title = element_text(size = 14, face = "bold"),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 10)
+  ) +
+  # Set y-axis to show percentages
+  scale_y_continuous(labels = scales::percent_format())
+```
+
+## Comments on Results
+```{r birthday-commentary, echo=FALSE}
+# Find the group size where probability exceeds 50%
+threshold_size <- birthday_results %>%
+  filter(probability >= 0.5) %>%
+  slice_min(group_size) %>%
+  pull(group_size)
+```
+
+- With just **`r threshold_size` people**, there's already a >50% chance of a shared birthday
+- The probability increases rapidly at first, then levels off
+- With 50 people, the probability is approximately **`r scales::percent(birthday_results$probability[birthday_results$group_size == 50], accuracy = 0.1)`**
+- This counterintuitive result occurs because we're comparing all possible pairs of people, not just one person to all others
+
+
+# Problem 2: Power Analysis Simulation
+
+Power is the probability of correctly rejecting a false null hypothesis. We'll explore in this question how effect size affects power.
+
+## Step 1: Create a function to simulate and test data
+```{r power-function}
+# Generate data and perform t-test
+sim_t_test <- function(n = 30, mu = 0, sigma = 5) {
+  # Generate data from normal distribution
+  data <- rnorm(n = n, mean = mu, sd = sigma)
+  
+  # Perform one-sample t-test against null hypothesis mu = 0
+  test_result <- t.test(data, mu = 0, conf.level = 0.95)
+  
+  # Use broom::tidy to create a clean dataframe
+  tidy_result <- broom::tidy(test_result)
+  
+  # Return a tibble with estimate and p-value
+  tibble(
+    mu_hat = tidy_result$estimate,    # Estimated mean
+    p_value = tidy_result$p.value     # P-value
+  )
+}
+```
+
+## Step 2: Run simulations for μ = 0
+```{r power-mu0}
+# Simulate 5000 datasets with mu = 0
+sim_results_mu0 <- tibble(
+  simulation = 1:5000
+) %>%
+  mutate(
+    results = map(simulation, ~sim_t_test(n = 30, mu = 0, sigma = 5))
+  ) %>%
+  unnest(results)
+
+# Preview the results
+head(sim_results_mu0)
+```
+
+## Step 3: Run simulations for μ = {1,2,3,4,5,6}
+```{r power-multiple-mu}
+# Simulate for different values of mu
+sim_results_all <- tibble(
+  true_mu = c(0, 1, 2, 3, 4, 5, 6)
+) %>%
+  mutate(
+    # For each true_mu, run 5000 simulations
+    results = map(true_mu, ~{
+      tibble(simulation = 1:5000) %>%
+        mutate(
+          sim_data = map(simulation, function(x) sim_t_test(n = 30, mu = .x, sigma = 5))
+        ) %>%
+        unnest(sim_data)
+    })
+  ) %>%
+  unnest(results)
+
+# Calculate power (proportion of times null was rejected at alpha = 0.05)
+power_results <- sim_results_all %>%
+  group_by(true_mu) %>%
+  summarize(
+    power = mean(p_value < 0.05),
+    avg_mu_hat = mean(mu_hat),              # Average estimate (all samples)
+    avg_mu_hat_rejected = mean(mu_hat[p_value < 0.05])  # Average estimate (rejected only)
+  )
+
+power_results
+```
+
+## Step 4: Plot power vs. effect size
+```{r power-plot}
+ggplot(power_results, aes(x = true_mu, y = power)) +
+  geom_line(color = "blue", size = 1.2) +
+  geom_point(size = 3, color = "blue") +
+  labs(
+    title = "Power vs. Effect Size",
+    subtitle = "One-sample t-test with n=30, σ=5, α=0.05",
+    x = "True Value of μ",
+    y = "Power (Proportion of Times Null Rejected)"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 14, face = "bold"),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 10)
+  ) +
+  scale_y_continuous(labels = scales::percent_format(), limits = c(0, 1))
+```
+
+**Association between effect size and power:**
+
+As the true effect size (μ) increases from 0 to 6, the power increases dramatically:
+- At μ = 0 (null is true), power ≈ 0.05 (the Type I error rate)
+- At μ = 1, power is low (~`r scales::percent(power_results$power[power_results$true_mu == 1], accuracy = 1)`)
+- At μ = 4, power exceeds 90%
+- At μ = 6, power approaches 100%
+
+**Conclusion:** Larger effect sizes are much easier to detect, resulting in higher power.
+
+## Step 5: Plot average estimates
+```{r estimate-plots}
+# Reshape data for plotting
+estimate_plot_data <- power_results %>%
+  select(true_mu, avg_mu_hat, avg_mu_hat_rejected) %>%
+  pivot_longer(
+    cols = c(avg_mu_hat, avg_mu_hat_rejected),
+    names_to = "estimate_type",
+    values_to = "average_estimate"
+  ) %>%
+  mutate(
+    estimate_type = recode(estimate_type,
+                          "avg_mu_hat" = "All Samples",
+                          "avg_mu_hat_rejected" = "Rejected Samples Only")
+  )
+
+# Create the plot
+ggplot(estimate_plot_data, aes(x = true_mu, y = average_estimate, color = estimate_type)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 3) +
+  # Add reference line: y = x (perfect estimation)
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "gray50") +
+  labs(
+    title = "Average Estimate of μ̂ vs. True μ",
+    subtitle = "(Comparing all samples vs. samples where null was rejected)",
+    x = "True Value of μ",
+    y = "Average Estimate of μ̂",
+    color = "Sample Type"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 14, face = "bold"),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 10),
+    legend.position = "bottom"
+  ) +
+  scale_color_manual(values = c("All Samples" = "blue", "Rejected Samples Only" = "red"))
+```
+
+**Is the sample average of μ̂ across tests where the null is rejected approximately equal to the true value of μ?**
+
+No, not for small effect sizes: for all samples (blue line), the average μ̂ closely matches the true μ (follows the diagonal reference line); for rejected samples only (red line), the average μ̂ is biased upward when the true μ is small (μ = 1, 2, 3). This bias decreases as effect size increases, and the lines converge at larger μ values
+
+This is selection bias: When the true effect is small and power is low, we only reject the null when we happen to get an unusually large estimate. These "significant" results overestimate the true effect because they were selected specifically for being large enough to be significant. As power increases, we are able to reject the null consistently regardless of sampling variability, and thus the bias disappears
+
+
+# Problem 3: Homicide Data Analysis
+
+## Step 1: Download and load the data
+
+```{r load-homicide-data}
+# Load the homicide data
+homicide_data <- read_csv("data/homicide-data.csv")
+
+# Display the structure of the data
+glimpse(homicide_data)
+```
+
+## Step 2: Describe the raw data
+```{r describe-data}
+# Get basic information about dataset
+cat("Dataset Dimensions:\n")
+cat("- Number of observations:", nrow(homicide_data), "\n")
+cat("- Number of variables:", ncol(homicide_data), "\n\n")
+
+cat("Variables in the dataset:\n")
+cat(paste("-", names(homicide_data), collapse = "\n"))
+```
+
+**Description of raw data:**
+
+The Washington Post homicide dataset contains `r format(nrow(homicide_data), big.mark=",")` homicides across 50 large U.S. cities from the past decade. 
+
+Key variables include: **Victim information:** name, race, age, sex; **Location:** city, state, latitude, longitude; **Case details:** reported date, disposition (outcome)
+
+The `disposition` variable indicates the case status: 1. "Closed by arrest" (solved), 2."Closed without arrest" (unsolved), 3."Open/No arrest" (unsolved)
+
+## Step 3: Create city_state variable, and summarize
+```{r city-summary}
+# Create city_state variable and summarize
+homicide_summary <- homicide_data %>%
+  # Create city_state variable
+  mutate(city_state = str_c(city, state, sep = ", ")) %>%
+  # Group by city
+  group_by(city_state) %>%
+  # Calculate total and unsolved homicides
+  summarize(
+    total_homicides = n(),
+    unsolved_homicides = sum(disposition %in% c("Closed without arrest", "Open/No arrest"))
+  ) %>%
+  ungroup()
+
+homicide_summary %>%
+  arrange(desc(total_homicides))
+```
+
+## Step 4: Proportion test for Baltimore, MD
+```{r baltimore-test}
+# Filter for Baltimore
+baltimore_data <- homicide_summary %>%
+  filter(city_state == "Baltimore, MD")
+
+# Perform proportion test
+baltimore_test <- prop.test(
+  x = baltimore_data$unsolved_homicides,
+  n = baltimore_data$total_homicides
+)
+
+# Tidy the result
+baltimore_tidy <- broom::tidy(baltimore_test)
+
+# Display results
+baltimore_tidy
+
+# Extract key values
+baltimore_prop <- baltimore_tidy$estimate
+baltimore_ci_lower <- baltimore_tidy$conf.low
+baltimore_ci_upper <- baltimore_tidy$conf.high
+
+cat("\nBaltimore, MD Results:\n")
+cat("Proportion of unsolved homicides:", round(baltimore_prop, 3), "\n")
+cat("95% Confidence Interval: [", round(baltimore_ci_lower, 3), ",", round(baltimore_ci_upper, 3), "]\n")
+```
+
+## Step 5: Run prop.test for all cities
+```{r all-cities-test}
+# Function to perform prop.test and return tidy results
+prop_test_city <- function(unsolved, total) {
+  # Perform the test
+  test_result <- prop.test(x = unsolved, n = total)
+  # Return tidy dataframe
+  broom::tidy(test_result)
+}
+
+# Apply prop.test to all cities
+city_proportions <- homicide_summary %>%
+  # Use map2 to apply function to two columns at once
+  mutate(
+    test_results = map2(unsolved_homicides, total_homicides, prop_test_city)
+  ) %>%
+  unnest(test_results) %>%
+  select(city_state, estimate, conf.low, conf.high)
+
+city_proportions %>%
+  arrange(desc(estimate))
+```
+
+## Step 6: Create plot with error bars
+```{r homicide-plot, fig.height=10}
+# Create plot with cities ordered by proportion of unsolved homicides
+city_proportions %>%
+# Reorder cities by estimated proportion
+mutate(city_state = fct_reorder(city_state, estimate)) %>%
+# Create plot
+ggplot(aes(x = city_state, y = estimate)) +
+# Add error bars for confidence intervals
+geom_errorbar(aes(ymin = conf.low, ymax = conf.high), 
+                width = 0.3, color = "gray50", size = 0.8) +
+# Add points for estimates
+geom_point(size = 2.5, color = "red") +
+# Flip coordinates for horizontal display
+coord_flip() +
+# Add labels and title
+labs(
+    title = "Proportion of Unsolved Homicides by City",
+    subtitle = "Error bars represent 95% confidence intervals",
+    x = "City, State",
+    y = "Proportion of Unsolved Homicides"
+  ) +
+  # Use a clean theme for readability 
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 14, face = "bold"),
+    axis.title = element_text(size = 11),
+    axis.text = element_text(size = 9),
+    axis.text.y = element_text(size = 8)
+  ) +
+# Format y-axis as percentages
+scale_y_continuous(labels = scales::percent_format())
+```
+
+**Key Observations:**
+
+1. **Highest rates:** Chicago, IL and New Orleans, LA have the highest proportions of unsolved homicides (>70%)
+2. **Lowest rates:** Richmond, VA and Charlotte, NC have the lowest proportions (<30%)
+3. There's substantial variation across cities, ranging from ~26% to ~74% unsolved
+4. **C.I.:** Larger cities tend to have narrower CIs due to larger sample sizes
+
